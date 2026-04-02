@@ -16,7 +16,6 @@
 static unsigned balance_timeout;
 
 #define BALANCE_TIMEOUT	5 /* how often to balance queues in seconds */
-#define CPU_PENALTY_THRESHOLD 5 /* penalize after this many full quantums */
 
 static int schedule_process(struct schedproc * rmp, unsigned flags);
 
@@ -97,12 +96,8 @@ int do_noquantum(message *m_ptr)
 	}
 
 	rmp = &schedproc[proc_nr_n];
-	rmp->cpu_quantum_streak++;
-
-	if (rmp->cpu_quantum_streak > CPU_PENALTY_THRESHOLD &&
-	    rmp->priority < MIN_USER_Q) {
+	if (rmp->priority < MIN_USER_Q) {
 		rmp->priority += 1; /* lower priority */
-		rmp->cpu_quantum_streak = 0;
 	}
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
@@ -134,7 +129,6 @@ int do_stop_scheduling(message *m_ptr)
 #ifdef CONFIG_SMP
 	cpu_proc[rmp->cpu]--;
 #endif
-	rmp->cpu_quantum_streak = 0;
 	rmp->flags = 0; /*&= ~IN_USE;*/
 
 	return OK;
@@ -167,7 +161,6 @@ int do_start_scheduling(message *m_ptr)
 	rmp->endpoint     = m_ptr->m_lsys_sched_scheduling_start.endpoint;
 	rmp->parent       = m_ptr->m_lsys_sched_scheduling_start.parent;
 	rmp->max_priority = m_ptr->m_lsys_sched_scheduling_start.maxprio;
-	rmp->cpu_quantum_streak = 0;
 	if (rmp->max_priority >= NR_SCHED_QUEUES) {
 		return EINVAL;
 	}
@@ -287,7 +280,6 @@ int do_nice(message *m_ptr)
 
 	/* Update the proc entry and reschedule the process */
 	rmp->max_priority = rmp->priority = new_q;
-	rmp->cpu_quantum_streak = 0;
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
 		/* Something went wrong when rescheduling the process, roll
@@ -353,10 +345,10 @@ void init_scheduling(void)
  *				balance_queues				     *
  *===========================================================================*/
 
-/* This function is called every N ticks to rebalance the queues. CPU-bound
- * processes are penalized only after several consecutive quantums, while this
- * routine gradually restores their priority once they stop exhausting their
- * quantum for a while.
+/* This function in called every N ticks to rebalance the queues. The current
+ * scheduler bumps processes down one priority when ever they run out of
+ * quantum. This function will find all proccesses that have been bumped down,
+ * and pulls them back up. This default policy will soon be changed.
  */
 void balance_queues(void)
 {
@@ -368,9 +360,6 @@ void balance_queues(void)
 			if (rmp->priority > rmp->max_priority) {
 				rmp->priority -= 1; /* increase priority */
 				schedule_process_local(rmp);
-			}
-			else if (rmp->cpu_quantum_streak > 0) {
-				rmp->cpu_quantum_streak--;
 			}
 		}
 	}
