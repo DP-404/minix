@@ -42,10 +42,10 @@ void walk(const char *path, int level, int *indent) {
         int is_last_entry = (i == count - 1);
 
         for (int j = 0; j < level; j++) {
-            printf("%s    ", indent[j] ? " " : "│");
+            printf("%s    ", indent[j] ? " " : "|");
         }
 
-        printf("%s── %s\n", is_last_entry ? "└──" : "├──", names[i]);
+        printf("%s-- %s\n", is_last_entry ? "\\--" : "+--", names[i]);
 
         char full_path[2048];
         snprintf(full_path, sizeof(full_path), "%s/%s", path, names[i]);
