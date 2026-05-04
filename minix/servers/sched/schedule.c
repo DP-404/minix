@@ -15,7 +15,8 @@
 
 static unsigned balance_timeout;
 
-#define BALANCE_TIMEOUT	5 /* how often to balance queues in seconds */
+#define BALANCE_TIMEOUT	10 /* how often to balance queues in seconds */
+#define PENALTY_QUANTUMS 3 /* how many full quantums to consume to penalize */
 
 static int schedule_process(struct schedproc * rmp, unsigned flags);
 
@@ -96,8 +97,13 @@ int do_noquantum(message *m_ptr)
 	}
 
 	rmp = &schedproc[proc_nr_n];
-	if (rmp->priority < MIN_USER_Q) {
+	rmp->full_quantums++;
+	if (
+		rmp->priority < MIN_USER_Q
+		&& rmp->full_quantums >= PENALTY_QUANTUMS
+	) {
 		rmp->priority += 1; /* lower priority */
+		rmp->full_quantums = 0; /* reset used quantums after penalize */
 	}
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
@@ -130,6 +136,7 @@ int do_stop_scheduling(message *m_ptr)
 	cpu_proc[rmp->cpu]--;
 #endif
 	rmp->flags = 0; /*&= ~IN_USE;*/
+	rmp->full_quantums = 0;
 
 	return OK;
 }
@@ -161,6 +168,7 @@ int do_start_scheduling(message *m_ptr)
 	rmp->endpoint     = m_ptr->m_lsys_sched_scheduling_start.endpoint;
 	rmp->parent       = m_ptr->m_lsys_sched_scheduling_start.parent;
 	rmp->max_priority = m_ptr->m_lsys_sched_scheduling_start.maxprio;
+	rmp->full_quantums = 0;
 	if (rmp->max_priority >= NR_SCHED_QUEUES) {
 		return EINVAL;
 	}
@@ -280,6 +288,7 @@ int do_nice(message *m_ptr)
 
 	/* Update the proc entry and reschedule the process */
 	rmp->max_priority = rmp->priority = new_q;
+	rmp->full_quantums = 0;
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
 		/* Something went wrong when rescheduling the process, roll
@@ -346,9 +355,10 @@ void init_scheduling(void)
  *===========================================================================*/
 
 /* This function in called every N ticks to rebalance the queues. The current
- * scheduler bumps processes down one priority when ever they run out of
- * quantum. This function will find all proccesses that have been bumped down,
- * and pulls them back up. This default policy will soon be changed.
+ * scheduler penalizes processes down one priority whenever they consume a
+ * certain amount of quantum. This function will find all proccesses that have
+ * been penalized, and restores their priority by one if they did not consume
+ * full quantums during a window.
  */
 void balance_queues(void)
 {
@@ -357,11 +367,15 @@ void balance_queues(void)
 
 	for (proc_nr=0, rmp=schedproc; proc_nr < NR_PROCS; proc_nr++, rmp++) {
 		if (rmp->flags & IN_USE) {
-			if (rmp->priority > rmp->max_priority) {
+			if (
+				rmp->priority > rmp->max_priority
+				&& rmp->full_quantums == 0
+			) {
 				rmp->priority -= 1; /* increase priority */
 				schedule_process_local(rmp);
 			}
 		}
+		rmp->full_quantums = 0; /* reset used quantums for next window */
 	}
 
 	if ((r = sys_setalarm(balance_timeout, 0)) != OK)
